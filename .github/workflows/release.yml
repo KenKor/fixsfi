@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            binary_name: FixSfi
+            asset_name: fixsfi-linux-x64.zip
+          - os: windows-latest
+            rid: win-x64
+            binary_name: FixSfi.exe
+            asset_name: fixsfi-win-x64.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore FixSfi.sln
+
+      - name: Publish single-file executable
+        run: >
+          dotnet publish FixSfi/FixSfi.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o ./publish/${{ matrix.rid }}
+
+      - name: Validate published binary
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "./publish/${{ matrix.rid }}/${{ matrix.binary_name }}")) {
+            throw "Published binary not found."
+          }
+
+      - name: Archive artifact
+        shell: pwsh
+        run: Compress-Archive -Path "./publish/${{ matrix.rid }}/*" -DestinationPath "./${{ matrix.asset_name }}" -Force
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ./${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  attach-to-release:
+    name: Attach assets to GitHub Release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          find ./dist -type f -name '*.zip' -print0 | while IFS= read -r -d '' file; do
+            gh release upload "$TAG_NAME" "$file" --clobber
+          done
