@@ -1,0 +1,25 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    name: Build & Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore FixSfi.sln
+      - name: Build
+        run: dotnet build FixSfi.sln -c Release --no-restore
+      - name: Smoke test (--help)
+        run: dotnet run --project FixSfi/FixSfi.csproj --no-build -c Release -- --help
+      - name: Smoke test (dry-run on repo root)
+        run: dotnet run --project FixSfi/FixSfi.csproj --no-build -c Release -- . --what-if
