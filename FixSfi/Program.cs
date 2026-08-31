@@ -34,16 +34,22 @@ internal static class Program
             return 0;
         }
 
-        var targetPath = Path.GetFullPath(parseResult.TargetPath ?? Directory.GetCurrentDirectory());
-        if (!Directory.Exists(targetPath))
+        var requestedPath = Path.GetFullPath(parseResult.TargetPath ?? Directory.GetCurrentDirectory());
+        if (!Directory.Exists(requestedPath))
         {
-            Console.Error.WriteLine($"Target path does not exist: {targetPath}");
+            Console.Error.WriteLine($"Target path does not exist: {requestedPath}");
             return 2;
         }
+
+        var targetPath = ResolveCanonicalPath(requestedPath);
 
         var modeText = parseResult.Apply ? "APPLY" : "WHAT-IF";
         Console.WriteLine($"Mode: {modeText}");
         Console.WriteLine($"Target path: {targetPath}");
+        if (!string.Equals(targetPath, requestedPath, StringComparison.Ordinal))
+        {
+            Console.WriteLine($"Resolved from: {requestedPath}");
+        }
 
         var sfiFiles = Directory
             .EnumerateFiles(targetPath, "*.sfi", SearchOption.AllDirectories)
@@ -99,6 +105,48 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine($"Summary: changed={updatedCount}, unchanged={unchangedCount}, errors={errorCount}");
         return errorCount > 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Resolves a directory path to its real on-disk location by expanding every
+    /// symbolic link in the path, so that the absolute .ds paths written into .sfi
+    /// files do not depend on which alias the tool was invoked through
+    /// (for example /home/ken/vmds -> /vmds).
+    /// </summary>
+    /// <param name="path">Existing absolute directory path.</param>
+    /// <returns>Canonical directory path, or the input when it cannot be resolved.</returns>
+    private static string ResolveCanonicalPath(string path)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(path);
+            if (string.IsNullOrEmpty(root))
+            {
+                return path;
+            }
+
+            var current = root;
+            var segments = path[root.Length..]
+                .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var segment in segments)
+            {
+                current = Path.Combine(current, segment);
+
+                // Returns null when the component is not a symbolic link.
+                var linkTarget = Directory.ResolveLinkTarget(current, returnFinalTarget: true);
+                if (linkTarget is not null)
+                {
+                    current = Path.GetFullPath(linkTarget.FullName);
+                }
+            }
+
+            return Directory.Exists(current) ? current : path;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return path;
+        }
     }
 
     /// <summary>
